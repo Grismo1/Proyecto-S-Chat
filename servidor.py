@@ -19,14 +19,14 @@ def health():
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
     await websocket.accept()
-    print("🔌 CLIENT CONNECTED")
+    print("🔌 CONNECTED")
 
     user = None
 
     try:
         # ---------------- LOGIN ----------------
         raw = await websocket.receive_text()
-        print("LOGIN RAW:", raw)
+        print("📩 LOGIN RAW:", raw)
 
         auth = json.loads(raw)
 
@@ -42,38 +42,42 @@ async def ws(websocket: WebSocket):
         clients.add(websocket)
 
         await websocket.send_text("OK_LOGIN")
-        print(f"✅ LOGIN OK: {user}")
-
-        # 🔥 IMPORTANTE: confirmación de loop activo
         await websocket.send_text("CHAT_READY")
+
+        print(f"✅ LOGIN OK: {user}")
 
         # ---------------- CHAT LOOP ----------------
         while True:
-            try:
-                msg = await websocket.receive_text()
-                print(f"📨 MSG FROM {user}: {msg}")
+            print("⏳ WAITING MESSAGE FROM:", user)
 
-                data = json.dumps({
-                    "user": user,
-                    "msg": msg
-                })
+            msg = await websocket.receive_text()
 
-                for c in list(clients):
-                    try:
-                        await c.send_text(data)
-                    except Exception as e:
-                        print("❌ REMOVE CLIENT:", e)
-                        clients.discard(c)
+            print(f"📨 RECEIVED RAW: {msg}")
 
-            except Exception as e:
-                print("⚠️ LOOP ERROR:", e)
-                break
+            data = json.dumps({
+                "user": user,
+                "msg": msg
+            })
+
+            print("📤 BROADCASTING:", data)
+
+            dead = []
+
+            for c in list(clients):
+                try:
+                    await c.send_text(data)
+                except Exception as e:
+                    print("❌ BROADCAST ERROR:", e)
+                    dead.append(c)
+
+            for d in dead:
+                clients.discard(d)
 
     except WebSocketDisconnect:
-        print(f"❌ DISCONNECT {user}")
+        print(f"❌ DISCONNECT: {user}")
 
     except Exception as e:
-        print("🔥 FATAL ERROR:", e)
+        print("🔥 SERVER CRASH:", repr(e))
 
     finally:
         clients.discard(websocket)
