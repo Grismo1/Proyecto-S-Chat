@@ -2,6 +2,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 import json
 import asyncio
 import sqlite3
+import bcrypt
 
 app = FastAPI()
 
@@ -11,7 +12,7 @@ clients = set()
 clients_lock = asyncio.Lock()
 
 
-# ---------------- DATABASE ----------------
+# ---------------- DB INIT ----------------
 
 def init_db():
     conn = sqlite3.connect(DB_NAME)
@@ -28,6 +29,11 @@ def init_db():
     conn.close()
 
 
+init_db()
+
+
+# ---------------- USERS ----------------
+
 def user_exists(username):
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
@@ -38,7 +44,6 @@ def user_exists(username):
     )
 
     result = cur.fetchone()
-
     conn.close()
 
     return result is not None
@@ -48,9 +53,12 @@ def create_user(username, password):
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
 
+    # 🔐 HASH bcrypt (NO encrypt)
+    hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
     cur.execute(
-        "INSERT INTO users(username,password) VALUES(?,?)",
-        (username, password)
+        "INSERT INTO users(username, password) VALUES(?, ?)",
+        (username, hashed)
     )
 
     conn.commit()
@@ -67,16 +75,20 @@ def check_login(username, password):
     )
 
     row = cur.fetchone()
-
     conn.close()
 
-    if row is None:
+    if not row:
         return False
 
-    return row[0] == password
+    stored_hash = row[0]
 
-
-init_db()
+    try:
+        return bcrypt.checkpw(
+            password.encode(),
+            stored_hash.encode()
+        )
+    except:
+        return False
 
 
 # ---------------- HEALTH ----------------
@@ -88,13 +100,13 @@ def health():
 
 # ---------------- BROADCAST ----------------
 
-async def broadcast(data: str):
+async def broadcast(message: str):
     dead = []
 
     async with clients_lock:
         for c in clients:
             try:
-                await c.send_text(data)
+                await c.send_text(message)
             except:
                 dead.append(c)
 
@@ -112,15 +124,13 @@ async def ws(websocket: WebSocket):
 
     try:
         raw = await websocket.receive_text()
+        data = json.loads(raw)
 
-        auth = json.loads(raw)
+        action = data.get("action")
+        user = data.get("user")
+        password = data.get("password")
 
-        action = auth.get("action")
-        user = auth.get("user")
-        password = auth.get("password")
-
-        # -------- REGISTER --------
-
+        # ---------------- REGISTER ----------------
         if action == "register":
 
             if not user or not password:
@@ -135,14 +145,13 @@ async def ws(websocket: WebSocket):
 
             create_user(user, password)
 
-            print(f"✅ USER CREATED: {user}")
+            print(f"🟢 USER CREATED: {user}")
 
             await websocket.send_text("REGISTER_OK")
             await websocket.close()
             return
 
-        # -------- LOGIN --------
-
+        # ---------------- LOGIN ----------------
         if not check_login(user, password):
             await websocket.send_text("ERROR_LOGIN")
             await websocket.close()
@@ -151,8 +160,7 @@ async def ws(websocket: WebSocket):
         async with clients_lock:
             clients.add(websocket)
 
-        print(f"✅ LOGIN OK: {user}")
-        print(f"👥 ONLINE: {len(clients)}")
+        print(f"🟢 LOGIN OK: {user}")
 
         await websocket.send_text("OK_LOGIN")
 
@@ -161,16 +169,14 @@ async def ws(websocket: WebSocket):
             "msg": f"{user} se conectó"
         }))
 
+        # ---------------- CHAT LOOP ----------------
         while True:
-
             msg = await websocket.receive_text()
 
-            data = json.dumps({
+            await broadcast(json.dumps({
                 "user": user,
                 "msg": msg
-            })
-
-            await broadcast(data)
+            }))
 
     except WebSocketDisconnect:
         print(f"❌ DISCONNECTED: {user}")
@@ -179,7 +185,6 @@ async def ws(websocket: WebSocket):
         print("🔥 SERVER ERROR:", repr(e))
 
     finally:
-
         async with clients_lock:
             clients.discard(websocket)
 
@@ -188,5 +193,3 @@ async def ws(websocket: WebSocket):
                 "user": "SYSTEM",
                 "msg": f"{user} se desconectó"
             }))
-
-        print("🧹 CLEANUP DONE")
