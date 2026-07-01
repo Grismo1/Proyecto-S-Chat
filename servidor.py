@@ -1,5 +1,6 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 import json
+import asyncio
 
 app = FastAPI()
 
@@ -9,6 +10,7 @@ USERS_DB = {
 }
 
 clients = set()
+clients_lock = asyncio.Lock()
 
 
 @app.get("/")
@@ -16,12 +18,25 @@ def health():
     return {"status": "ok"}
 
 
+# ---------------- BROADCAST SEGURO ----------------
+async def broadcast(data: str):
+    dead = []
+
+    async with clients_lock:
+        for c in clients:
+            try:
+                await c.send_text(data)
+            except:
+                dead.append(c)
+
+        for d in dead:
+            clients.discard(d)
+
+
+# ---------------- WEBSOCKET ----------------
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
-    print("🔥 ENTERED WEBSOCKET HANDLER")
-
     await websocket.accept()
-    print("🔌 ACCEPTED CONNECTION")
 
     user = None
 
@@ -37,36 +52,26 @@ async def ws(websocket: WebSocket):
         if USERS_DB.get(user) != password:
             await websocket.send_text("ERROR_LOGIN")
             await websocket.close()
-            print("❌ LOGIN FAILED")
             return
 
-        clients.add(websocket)
-
-        await websocket.send_text("OK_LOGIN")
-        await websocket.send_text("CHAT_READY")
+        async with clients_lock:
+            clients.add(websocket)
 
         print(f"✅ LOGIN OK: {user}")
+        print(f"👥 CLIENTS ONLINE: {len(clients)}")
+
+        await websocket.send_text("OK_LOGIN")
 
         while True:
-            print("⏳ WAITING MESSAGE...")
-
             msg = await websocket.receive_text()
-
-            print(f"📨 RECEIVED: {msg}")
+            print(f"📨 {user}: {msg}")
 
             data = json.dumps({
                 "user": user,
                 "msg": msg
             })
 
-            print("📤 BROADCAST:", data)
-
-            for c in list(clients):
-                try:
-                    await c.send_text(data)
-                except Exception as e:
-                    print("❌ SEND ERROR:", e)
-                    clients.discard(c)
+            await broadcast(data)
 
     except WebSocketDisconnect:
         print(f"❌ DISCONNECTED: {user}")
@@ -75,5 +80,7 @@ async def ws(websocket: WebSocket):
         print("🔥 SERVER ERROR:", repr(e))
 
     finally:
-        clients.discard(websocket)
+        async with clients_lock:
+            clients.discard(websocket)
+
         print("🧹 CLEANUP DONE")
