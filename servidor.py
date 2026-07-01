@@ -1,8 +1,7 @@
-import asyncio
-import websockets
+from fastapi import FastAPI, WebSocket
 import json
-import os
-from aiohttp import web
+
+app = FastAPI()
 
 USERS_DB = {
     "admin": "1234",
@@ -11,64 +10,42 @@ USERS_DB = {
 
 CONNECTED = {}
 
-async def handler(ws):
+@app.get("/")
+def health():
+    return {"status": "ok"}
+
+@app.websocket("/")
+async def ws(websocket: WebSocket):
+    await websocket.accept()
+
     user = None
+
     try:
-        auth_data = await ws.recv()
-        auth = json.loads(auth_data)
+        auth = json.loads(await websocket.receive_text())
 
-        username = auth.get("user")
-        password = auth.get("password")
+        username = auth["user"]
+        password = auth["password"]
 
-        if username not in USERS_DB or USERS_DB[username] != password:
-            await ws.send("ERROR_LOGIN")
+        if USERS_DB.get(username) != password:
+            await websocket.send_text("ERROR_LOGIN")
             return
 
-        if username in CONNECTED:
-            await ws.send("ERROR_ALREADY_LOGGED")
-            return
+        CONNECTED[username] = websocket
+        await websocket.send_text("OK_LOGIN")
 
-        user = username
-        CONNECTED[user] = ws
+        while True:
+            msg = await websocket.receive_text()
 
-        await ws.send("OK_LOGIN")
-
-        async for msg in ws:
-            data = json.dumps({"user": user, "msg": msg})
+            data = json.dumps({
+                "user": username,
+                "msg": msg
+            })
 
             for conn in list(CONNECTED.values()):
                 try:
-                    await conn.send(data)
+                    await conn.send_text(data)
                 except:
                     pass
 
-    finally:
-        if user:
-            CONNECTED.pop(user, None)
-
-async def ws_server():
-    port = int(os.environ.get("PORT", 10000))
-    return websockets.serve(handler, "0.0.0.0", port)
-
-async def http_handler(request):
-    return web.Response(text="OK")
-
-async def main():
-    port = int(os.environ.get("PORT", 10000))
-
-    # HTTP (Render health check)
-    app = web.Application()
-    app.router.add_get("/", http_handler)
-
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-
-    # WebSocket en paralelo NO funciona así con mismo puerto en websockets puro
-    # 👉 por eso esto ya te dice algo importante:
-    print("Render necesita FastAPI o aiohttp completo")
-
-    await asyncio.Future()
-
-asyncio.run(main())
+    except:
+        pass
