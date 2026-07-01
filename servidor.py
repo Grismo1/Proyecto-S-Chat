@@ -1,51 +1,39 @@
 import asyncio
 import websockets
+import json
 
-clientes = set()
+async def chat():
+    uri = "wss://TU-RENDER.onrender.com"
 
-async def manejar_cliente(websocket):
+    async with websockets.connect(uri) as ws:
 
-    clientes.add(websocket)
+        user = input("Usuario: ")
+        password = input("Contraseña: ")
 
-    print("Usuario conectado")
+        await ws.send(json.dumps({
+            "user": user,
+            "password": password
+        }))
 
-    try:
-        async for mensaje in websocket:
+        resp = await ws.recv()
 
-            print("Mensaje:", mensaje)
+        if resp == "ERROR_LOGIN":
+            print("Login incorrecto")
+            return
 
-            desconectados = []
+        print("Conectado al chat")
 
-            for cliente in clientes:
-                try:
-                    if cliente != websocket:
-                        await cliente.send(mensaje)
-                except:
-                    desconectados.append(cliente)
+        async def recibir():
+            while True:
+                msg = await ws.recv()
+                data = json.loads(msg)
+                print(f"{data['user']}: {data['msg']}")
 
-            for c in desconectados:
-                clientes.discard(c)
+        async def enviar():
+            while True:
+                msg = input()
+                await ws.send(msg)
 
-    except:
-        pass
+        await asyncio.gather(recibir(), enviar())
 
-    finally:
-        clientes.discard(websocket)
-        print("Usuario desconectado")
-
-
-async def main():
-
-    puerto = 10000
-
-    print(f"Servidor iniciado en puerto {puerto}")
-
-    async with websockets.serve(
-        manejar_cliente,
-        "0.0.0.0",
-        puerto
-    ):
-        await asyncio.Future()
-
-
-asyncio.run(main())
+asyncio.run(chat())
