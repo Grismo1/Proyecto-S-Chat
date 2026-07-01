@@ -14,8 +14,8 @@ CONNECTED = {}
 def health():
     return {"status": "ok"}
 
-@app.websocket("/")
-async def ws(websocket: WebSocket):
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
 
     user = None
