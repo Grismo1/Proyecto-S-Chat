@@ -8,7 +8,8 @@ USERS_DB = {
     "user1": "pass1"
 }
 
-connections = set()
+clients = set()
+
 
 @app.get("/")
 def health():
@@ -25,47 +26,55 @@ async def ws(websocket: WebSocket):
     try:
         # ---------------- LOGIN ----------------
         raw = await websocket.receive_text()
-        print("📩 RAW LOGIN:", raw)
+        print("LOGIN RAW:", raw)
 
         auth = json.loads(raw)
 
-        username = auth.get("user")
+        user = auth.get("user")
         password = auth.get("password")
 
-        if USERS_DB.get(username) != password:
+        if USERS_DB.get(user) != password:
             await websocket.send_text("ERROR_LOGIN")
             await websocket.close()
             print("❌ LOGIN FAILED")
             return
 
-        user = username
-        connections.add(websocket)
+        clients.add(websocket)
 
         await websocket.send_text("OK_LOGIN")
-        print(f"✅ {user} LOGGED IN")
+        print(f"✅ LOGIN OK: {user}")
+
+        # 🔥 IMPORTANTE: confirmación de loop activo
+        await websocket.send_text("CHAT_READY")
 
         # ---------------- CHAT LOOP ----------------
         while True:
-            msg = await websocket.receive_text()
-            print(f"📨 FROM {user}: {msg}")
+            try:
+                msg = await websocket.receive_text()
+                print(f"📨 MSG FROM {user}: {msg}")
 
-            data = json.dumps({
-                "user": user,
-                "msg": msg
-            })
+                data = json.dumps({
+                    "user": user,
+                    "msg": msg
+                })
 
-            for conn in list(connections):
-                try:
-                    await conn.send_text(data)
-                except:
-                    connections.discard(conn)
+                for c in list(clients):
+                    try:
+                        await c.send_text(data)
+                    except Exception as e:
+                        print("❌ REMOVE CLIENT:", e)
+                        clients.discard(c)
+
+            except Exception as e:
+                print("⚠️ LOOP ERROR:", e)
+                break
 
     except WebSocketDisconnect:
-        print(f"❌ {user} DISCONNECTED")
+        print(f"❌ DISCONNECT {user}")
 
     except Exception as e:
-        print("⚠️ ERROR:", e)
+        print("🔥 FATAL ERROR:", e)
 
     finally:
-        if websocket in connections:
-            connections.remove(websocket)
+        clients.discard(websocket)
+        print("🧹 CLEANUP DONE")
