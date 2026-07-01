@@ -1,4 +1,4 @@
-from fastapi import FastAPI, WebSocket
+ffrom fastapi import FastAPI, WebSocket
 import json
 
 app = FastAPI()
@@ -10,9 +10,22 @@ USERS_DB = {
 
 CONNECTED = set()
 
+
 @app.get("/")
 def health():
     return {"status": "ok"}
+
+
+async def broadcast(message: str, sender_ws: WebSocket):
+    """
+    Envía mensaje a todos menos al que lo envió (opcional mejora)
+    """
+    for conn in list(CONNECTED):
+        try:
+            await conn.send_text(message)
+        except:
+            CONNECTED.discard(conn)
+
 
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
@@ -21,13 +34,17 @@ async def ws(websocket: WebSocket):
     user = None
 
     try:
-        auth = json.loads(await websocket.receive_text())
+        # 1. LOGIN (primer mensaje obligatorio)
+        auth_raw = await websocket.receive_text()
+        auth = json.loads(auth_raw)
 
         username = auth.get("user", "").strip()
         password = auth.get("password", "").strip()
 
+        # validación segura
         if USERS_DB.get(username) != password:
             await websocket.send_text("ERROR_LOGIN")
+            await websocket.close()
             return
 
         user = username
@@ -35,6 +52,9 @@ async def ws(websocket: WebSocket):
 
         await websocket.send_text("OK_LOGIN")
 
+        print(f"[LOGIN] {user}")
+
+        # 2. LOOP PRINCIPAL
         while True:
             msg = await websocket.receive_text()
 
@@ -43,16 +63,14 @@ async def ws(websocket: WebSocket):
                 "msg": msg
             })
 
-            # 🔥 COPY LIST para evitar errores durante iteración
-            for conn in list(CONNECTED):
-                try:
-                    await conn.send_text(data)
-                except:
-                    CONNECTED.remove(conn)
+            print(f"[MSG] {user}: {msg}")
 
-    except:
-        pass
+            # 🔥 broadcast real a todos los clientes
+            await broadcast(data, websocket)
+
+    except Exception as e:
+        print("[ERROR]", repr(e))
 
     finally:
-        if websocket in CONNECTED:
-            CONNECTED.remove(websocket)
+        CONNECTED.discard(websocket)
+        print(f"[DISCONNECT] {user}")
