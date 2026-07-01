@@ -11,17 +11,23 @@ USERS_DB = {
 connections = set()
 
 @app.get("/")
-def home():
+def health():
     return {"status": "ok"}
+
 
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
     await websocket.accept()
+    print("🔌 CLIENT CONNECTED")
 
     user = None
 
     try:
-        auth = json.loads(await websocket.receive_text())
+        # ---------------- LOGIN ----------------
+        raw = await websocket.receive_text()
+        print("📩 RAW LOGIN:", raw)
+
+        auth = json.loads(raw)
 
         username = auth.get("user")
         password = auth.get("password")
@@ -29,16 +35,19 @@ async def ws(websocket: WebSocket):
         if USERS_DB.get(username) != password:
             await websocket.send_text("ERROR_LOGIN")
             await websocket.close()
+            print("❌ LOGIN FAILED")
             return
 
         user = username
         connections.add(websocket)
 
         await websocket.send_text("OK_LOGIN")
-        print(user, "connected")
+        print(f"✅ {user} LOGGED IN")
 
+        # ---------------- CHAT LOOP ----------------
         while True:
             msg = await websocket.receive_text()
+            print(f"📨 FROM {user}: {msg}")
 
             data = json.dumps({
                 "user": user,
@@ -49,10 +58,14 @@ async def ws(websocket: WebSocket):
                 try:
                     await conn.send_text(data)
                 except:
-                    connections.remove(conn)
+                    connections.discard(conn)
 
     except WebSocketDisconnect:
-        pass
+        print(f"❌ {user} DISCONNECTED")
+
+    except Exception as e:
+        print("⚠️ ERROR:", e)
 
     finally:
-        connections.discard(websocket)
+        if websocket in connections:
+            connections.remove(websocket)
