@@ -1,39 +1,81 @@
 import asyncio
 import websockets
 import json
+import os
 
-async def chat():
-    uri = "wss://TU-RENDER.onrender.com"
+# Usuarios "registrados" (puedes luego mover esto a DB)
+USERS_DB = {
+    "admin": "1234",
+    "user1": "pass1"
+}
 
-    async with websockets.connect(uri) as ws:
+# Usuarios conectados: {username: websocket}
+CONNECTED = {}
 
-        user = input("Usuario: ")
-        password = input("Contraseña: ")
+async def handler(ws):
 
-        await ws.send(json.dumps({
-            "user": user,
-            "password": password
-        }))
+    user = None
 
-        resp = await ws.recv()
+    try:
+        # 1. LOGIN
+        auth_data = await ws.recv()
+        auth = json.loads(auth_data)
 
-        if resp == "ERROR_LOGIN":
-            print("Login incorrecto")
+        username = auth.get("user")
+        password = auth.get("password")
+
+        if username not in USERS_DB or USERS_DB[username] != password:
+            await ws.send("ERROR_LOGIN")
             return
 
-        print("Conectado al chat")
+        # evitar doble login
+        if username in CONNECTED:
+            await ws.send("ERROR_ALREADY_LOGGED")
+            return
 
-        async def recibir():
-            while True:
-                msg = await ws.recv()
-                data = json.loads(msg)
-                print(f"{data['user']}: {data['msg']}")
+        user = username
+        CONNECTED[user] = ws
 
-        async def enviar():
-            while True:
-                msg = input()
-                await ws.send(msg)
+        await ws.send("OK_LOGIN")
+        print(f"[+] {user} conectado")
 
-        await asyncio.gather(recibir(), enviar())
+        # 2. LOOP DE MENSAJES
+        async for msg in ws:
+            # mensaje plano del cliente
+            data = {
+                "user": user,
+                "msg": msg
+            }
 
-asyncio.run(chat())
+            # broadcast a todos
+            disconnected = []
+
+            for u, conn in CONNECTED.items():
+                try:
+                    await conn.send(json.dumps(data))
+                except:
+                    disconnected.append(u)
+
+            # limpiar conexiones muertas
+            for u in disconnected:
+                CONNECTED.pop(u, None)
+
+    except Exception as e:
+        print("Error:", e)
+
+    finally:
+        if user and user in CONNECTED:
+            CONNECTED.pop(user, None)
+            print(f"[-] {user} desconectado")
+
+
+async def main():
+    PORT = int(os.environ.get("PORT", 10000))
+
+    async with websockets.serve(handler, "0.0.0.0", PORT):
+        print(f"Servidor WebSocket activo en puerto {PORT}")
+        await asyncio.Future()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
