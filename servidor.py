@@ -8,14 +8,14 @@ USERS_DB = {
     "user1": "pass1"
 }
 
-CONNECTED = {}
+CONNECTED = set()
 
 @app.get("/")
 def health():
     return {"status": "ok"}
 
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
+async def ws(websocket: WebSocket):
     await websocket.accept()
 
     user = None
@@ -23,29 +23,36 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         auth = json.loads(await websocket.receive_text())
 
-        username = auth["user"]
-        password = auth["password"]
+        username = auth.get("user", "").strip()
+        password = auth.get("password", "").strip()
 
         if USERS_DB.get(username) != password:
             await websocket.send_text("ERROR_LOGIN")
             return
 
-        CONNECTED[username] = websocket
+        user = username
+        CONNECTED.add(websocket)
+
         await websocket.send_text("OK_LOGIN")
 
         while True:
             msg = await websocket.receive_text()
 
             data = json.dumps({
-                "user": username,
+                "user": user,
                 "msg": msg
             })
 
-            for conn in list(CONNECTED.values()):
+            # 🔥 COPY LIST para evitar errores durante iteración
+            for conn in list(CONNECTED):
                 try:
                     await conn.send_text(data)
                 except:
-                    pass
+                    CONNECTED.remove(conn)
 
     except:
         pass
+
+    finally:
+        if websocket in CONNECTED:
+            CONNECTED.remove(websocket)
