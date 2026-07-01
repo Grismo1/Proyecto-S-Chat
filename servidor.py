@@ -18,13 +18,14 @@ def health():
 
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
+    print("🔥 ENTERED WEBSOCKET HANDLER")
+
     await websocket.accept()
-    print("🔌 CONNECTED")
+    print("🔌 ACCEPTED CONNECTION")
 
     user = None
 
     try:
-        # ---------------- LOGIN ----------------
         raw = await websocket.receive_text()
         print("📩 LOGIN RAW:", raw)
 
@@ -46,38 +47,32 @@ async def ws(websocket: WebSocket):
 
         print(f"✅ LOGIN OK: {user}")
 
-        # ---------------- CHAT LOOP ----------------
         while True:
-            print("⏳ WAITING MESSAGE FROM:", user)
+            print("⏳ WAITING MESSAGE...")
 
             msg = await websocket.receive_text()
 
-            print(f"📨 RECEIVED RAW: {msg}")
+            print(f"📨 RECEIVED: {msg}")
 
             data = json.dumps({
                 "user": user,
                 "msg": msg
             })
 
-            print("📤 BROADCASTING:", data)
-
-            dead = []
+            print("📤 BROADCAST:", data)
 
             for c in list(clients):
                 try:
                     await c.send_text(data)
                 except Exception as e:
-                    print("❌ BROADCAST ERROR:", e)
-                    dead.append(c)
-
-            for d in dead:
-                clients.discard(d)
+                    print("❌ SEND ERROR:", e)
+                    clients.discard(c)
 
     except WebSocketDisconnect:
-        print(f"❌ DISCONNECT: {user}")
+        print(f"❌ DISCONNECTED: {user}")
 
     except Exception as e:
-        print("🔥 SERVER CRASH:", repr(e))
+        print("🔥 SERVER ERROR:", repr(e))
 
     finally:
         clients.discard(websocket)
