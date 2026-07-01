@@ -8,13 +8,11 @@ USERS_DB = {
     "user1": "pass1"
 }
 
-active_connections = {}  # username -> websocket
-
+connections = set()
 
 @app.get("/")
-def health():
+def home():
     return {"status": "ok"}
-
 
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
@@ -23,30 +21,22 @@ async def ws(websocket: WebSocket):
     user = None
 
     try:
-        # LOGIN
         auth = json.loads(await websocket.receive_text())
 
-        username = auth.get("user", "")
-        password = auth.get("password", "")
+        username = auth.get("user")
+        password = auth.get("password")
 
         if USERS_DB.get(username) != password:
             await websocket.send_text("ERROR_LOGIN")
             await websocket.close()
             return
 
-        if username in active_connections:
-            await websocket.send_text("ERROR_ALREADY_LOGGED")
-            await websocket.close()
-            return
-
         user = username
-        active_connections[user] = websocket
+        connections.add(websocket)
 
         await websocket.send_text("OK_LOGIN")
+        print(user, "connected")
 
-        print(f"{user} conectado")
-
-        # LOOP DE MENSAJES
         while True:
             msg = await websocket.receive_text()
 
@@ -55,21 +45,14 @@ async def ws(websocket: WebSocket):
                 "msg": msg
             })
 
-            # broadcast seguro
-            disconnected = []
-
-            for u, conn in active_connections.items():
+            for conn in list(connections):
                 try:
                     await conn.send_text(data)
                 except:
-                    disconnected.append(u)
-
-            for u in disconnected:
-                active_connections.pop(u, None)
+                    connections.remove(conn)
 
     except WebSocketDisconnect:
-        print(f"{user} desconectado")
+        pass
 
     finally:
-        if user in active_connections:
-            active_connections.pop(user, None)
+        connections.discard(websocket)
