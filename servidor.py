@@ -5,6 +5,8 @@ import sqlite3
 import bcrypt
 import traceback
 
+print("🔥 NUEVA VERSION SERVER CARGADA")
+
 app = FastAPI()
 
 DB_NAME = "chat.db"
