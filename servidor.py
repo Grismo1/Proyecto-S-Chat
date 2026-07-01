@@ -1,4 +1,4 @@
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 import json
 
 app = FastAPI()
@@ -8,23 +8,12 @@ USERS_DB = {
     "user1": "pass1"
 }
 
-CONNECTED = set()
+active_connections = {}  # username -> websocket
 
 
 @app.get("/")
 def health():
     return {"status": "ok"}
-
-
-async def broadcast(message: str, sender_ws: WebSocket):
-    """
-    Envía mensaje a todos menos al que lo envió (opcional mejora)
-    """
-    for conn in list(CONNECTED):
-        try:
-            await conn.send_text(message)
-        except:
-            CONNECTED.discard(conn)
 
 
 @app.websocket("/ws")
@@ -34,27 +23,30 @@ async def ws(websocket: WebSocket):
     user = None
 
     try:
-        # 1. LOGIN (primer mensaje obligatorio)
-        auth_raw = await websocket.receive_text()
-        auth = json.loads(auth_raw)
+        # LOGIN
+        auth = json.loads(await websocket.receive_text())
 
-        username = auth.get("user", "").strip()
-        password = auth.get("password", "").strip()
+        username = auth.get("user", "")
+        password = auth.get("password", "")
 
-        # validación segura
         if USERS_DB.get(username) != password:
             await websocket.send_text("ERROR_LOGIN")
             await websocket.close()
             return
 
+        if username in active_connections:
+            await websocket.send_text("ERROR_ALREADY_LOGGED")
+            await websocket.close()
+            return
+
         user = username
-        CONNECTED.add(websocket)
+        active_connections[user] = websocket
 
         await websocket.send_text("OK_LOGIN")
 
-        print(f"[LOGIN] {user}")
+        print(f"{user} conectado")
 
-        # 2. LOOP PRINCIPAL
+        # LOOP DE MENSAJES
         while True:
             msg = await websocket.receive_text()
 
@@ -63,14 +55,21 @@ async def ws(websocket: WebSocket):
                 "msg": msg
             })
 
-            print(f"[MSG] {user}: {msg}")
+            # broadcast seguro
+            disconnected = []
 
-            # 🔥 broadcast real a todos los clientes
-            await broadcast(data, websocket)
+            for u, conn in active_connections.items():
+                try:
+                    await conn.send_text(data)
+                except:
+                    disconnected.append(u)
 
-    except Exception as e:
-        print("[ERROR]", repr(e))
+            for u in disconnected:
+                active_connections.pop(u, None)
+
+    except WebSocketDisconnect:
+        print(f"{user} desconectado")
 
     finally:
-        CONNECTED.discard(websocket)
-        print(f"[DISCONNECT] {user}")
+        if user in active_connections:
+            active_connections.pop(user, None)
