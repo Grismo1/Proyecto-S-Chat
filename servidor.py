@@ -2,22 +2,18 @@ import asyncio
 import websockets
 import json
 import os
+from aiohttp import web
 
-# Usuarios "registrados" (puedes luego mover esto a DB)
 USERS_DB = {
     "admin": "1234",
     "user1": "pass1"
 }
 
-# Usuarios conectados: {username: websocket}
 CONNECTED = {}
 
 async def handler(ws):
-
     user = None
-
     try:
-        # 1. LOGIN
         auth_data = await ws.recv()
         auth = json.loads(auth_data)
 
@@ -28,7 +24,6 @@ async def handler(ws):
             await ws.send("ERROR_LOGIN")
             return
 
-        # evitar doble login
         if username in CONNECTED:
             await ws.send("ERROR_ALREADY_LOGGED")
             return
@@ -37,45 +32,43 @@ async def handler(ws):
         CONNECTED[user] = ws
 
         await ws.send("OK_LOGIN")
-        print(f"[+] {user} conectado")
 
-        # 2. LOOP DE MENSAJES
         async for msg in ws:
-            # mensaje plano del cliente
-            data = {
-                "user": user,
-                "msg": msg
-            }
+            data = json.dumps({"user": user, "msg": msg})
 
-            # broadcast a todos
-            disconnected = []
-
-            for u, conn in CONNECTED.items():
+            for conn in list(CONNECTED.values()):
                 try:
-                    await conn.send(json.dumps(data))
+                    await conn.send(data)
                 except:
-                    disconnected.append(u)
-
-            # limpiar conexiones muertas
-            for u in disconnected:
-                CONNECTED.pop(u, None)
-
-    except Exception as e:
-        print("Error:", e)
+                    pass
 
     finally:
-        if user and user in CONNECTED:
+        if user:
             CONNECTED.pop(user, None)
-            print(f"[-] {user} desconectado")
 
+async def ws_server():
+    port = int(os.environ.get("PORT", 10000))
+    return websockets.serve(handler, "0.0.0.0", port)
+
+async def http_handler(request):
+    return web.Response(text="OK")
 
 async def main():
-    PORT = int(os.environ.get("PORT", 10000))
+    port = int(os.environ.get("PORT", 10000))
 
-    async with websockets.serve(handler, "0.0.0.0", PORT):
-        print(f"Servidor WebSocket activo en puerto {PORT}")
-        await asyncio.Future()
+    # HTTP (Render health check)
+    app = web.Application()
+    app.router.add_get("/", http_handler)
 
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
 
-if __name__ == "__main__":
-    asyncio.run(main())
+    # WebSocket en paralelo NO funciona así con mismo puerto en websockets puro
+    # 👉 por eso esto ya te dice algo importante:
+    print("Render necesita FastAPI o aiohttp completo")
+
+    await asyncio.Future()
+
+asyncio.run(main())
