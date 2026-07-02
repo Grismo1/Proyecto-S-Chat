@@ -5,8 +5,6 @@ import sqlite3
 import bcrypt
 import traceback
 
-print("🔥 SERVER ONLINE - FIXED VERSION")
-
 app = FastAPI()
 
 DB_NAME = "chat.db"
@@ -15,9 +13,8 @@ clients = set()
 clients_lock = asyncio.Lock()
 
 
-# ======================================================
-# DB INIT
-# ======================================================
+# ---------------- DB ----------------
+
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
@@ -38,10 +35,8 @@ init_db()
 def user_exists(username):
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
-
     cur.execute("SELECT username FROM users WHERE username=?", (username,))
     r = cur.fetchone()
-
     conn.close()
     return r is not None
 
@@ -67,23 +62,19 @@ def check_login(username, password):
 
     cur.execute("SELECT password FROM users WHERE username=?", (username,))
     r = cur.fetchone()
-
     conn.close()
 
     if not r:
         return False
 
-    try:
-        return bcrypt.checkpw(password.encode(), r[0].encode())
-    except Exception as e:
-        print("🔥 BCRYPT ERROR:", e)
-        return False
+    return bcrypt.checkpw(password.encode(), r[0].encode())
 
 
-# ======================================================
-# BROADCAST
-# ======================================================
-async def broadcast(msg: str):
+# ---------------- BROADCAST ----------------
+
+async def broadcast(payload: dict):
+    msg = json.dumps(payload)
+
     dead = []
 
     async with clients_lock:
@@ -97,97 +88,81 @@ async def broadcast(msg: str):
             clients.discard(d)
 
 
-# ======================================================
-# WEBSOCKET (FIX REAL)
-# ======================================================
+# ---------------- WEBSOCKET ----------------
+
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
     await websocket.accept()
 
     user = None
 
-    print("\n🚀 NEW CONNECTION OPENED")
-
     try:
+        raw = await websocket.receive_text()
+        data = json.loads(raw)
+
+        action = data.get("action")
+        user = data.get("user")
+        password = data.get("password")
+
+        # ---------------- REGISTER ----------------
+        if action == "register":
+            if user_exists(user):
+                await websocket.send_text(json.dumps({
+                    "type": "register",
+                    "status": "error",
+                    "message": "USER_EXISTS"
+                }))
+                await websocket.close()
+                return
+
+            create_user(user, password)
+
+            await websocket.send_text(json.dumps({
+                "type": "register",
+                "status": "ok"
+            }))
+            await websocket.close()
+            return
+
+        # ---------------- LOGIN ----------------
+        if not check_login(user, password):
+            await websocket.send_text(json.dumps({
+                "type": "login",
+                "status": "error",
+                "message": "INVALID_LOGIN"
+            }))
+            await websocket.close()
+            return
+
         async with clients_lock:
             clients.add(websocket)
 
+        await websocket.send_text(json.dumps({
+            "type": "login",
+            "status": "ok",
+            "user": user
+        }))
+
+        await broadcast({
+            "type": "system",
+            "message": f"{user} se conectó"
+        })
+
+        # ---------------- CHAT LOOP ----------------
         while True:
-            raw = await websocket.receive_text()
-            print("📩 RAW:", raw)
+            msg = await websocket.receive_text()
 
-            try:
-                data = json.loads(raw)
-            except:
-                print("❌ INVALID JSON")
-                continue
-
-            action = data.get("action")
-
-            # ---------------- REGISTER ----------------
-            if action == "register":
-                username = data.get("user")
-                password = data.get("password")
-
-                if not username or not password:
-                    await websocket.send_text("ERROR_MISSING_FIELDS")
-                    continue
-
-                if user_exists(username):
-                    await websocket.send_text("ERROR_USER_EXISTS")
-                    continue
-
-                create_user(username, password)
-
-                print("🟢 REGISTER OK:", username)
-
-                await websocket.send_text("REGISTER_OK")
-                continue
-
-            # ---------------- LOGIN ----------------
-            if action == "login":
-                username = data.get("user")
-                password = data.get("password")
-
-                if not check_login(username, password):
-                    await websocket.send_text("ERROR_LOGIN")
-                    continue
-
-                user = username
-
-                await websocket.send_text("OK_LOGIN")
-
-                print("🟢 LOGIN OK:", user)
-
-                await broadcast(json.dumps({
-                    "user": "SYSTEM",
-                    "msg": f"{user} se conectó"
-                }))
-                continue
-
-            # ---------------- CHAT MESSAGE ----------------
-            if not user:
-                await websocket.send_text("ERROR_NOT_LOGGED")
-                continue
-
-            msg = data.get("msg")
-
-            if not msg:
-                continue
-
-            print(f"💬 CHAT: {user} -> {msg}")
-
-            await broadcast(json.dumps({
+            await broadcast({
+                "type": "message",
                 "user": user,
-                "msg": msg
-            }))
+                "message": msg
+            })
 
     except WebSocketDisconnect:
-        print("❌ DISCONNECT:", user)
+        pass
 
     except Exception as e:
-        print("🔥 SERVER ERROR:")
-        print(e)
+        print("SERVER ERROR:", e)
         traceback.print_exc()
 
     finally:
@@ -195,9 +170,7 @@ async def ws(websocket: WebSocket):
             clients.discard(websocket)
 
         if user:
-            await broadcast(json.dumps({
-                "user": "SYSTEM",
-                "msg": f"{user} se desconectó"
-            }))
-
-        print("🧹 CLEANUP DONE")
+            await broadcast({
+                "type": "system",
+                "message": f"{user} se desconectó"
+            })
