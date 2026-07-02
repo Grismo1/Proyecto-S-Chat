@@ -109,11 +109,23 @@ async def ws(ws: WebSocket):
         })
 
         while True:
-            msg = await ws.receive_text()
-            await broadcast({
-                "user": user,
-                "msg": msg
-            })
+    raw = await ws.receive_text()
+
+    try:
+        data = json.loads(raw)
+
+        if isinstance(data, dict):
+            texto = data.get("msg", "")
+        else:
+            texto = raw
+
+    except Exception:
+        texto = raw
+
+    await broadcast({
+        "user": user,
+        "msg": texto
+    })
 
     except WebSocketDisconnect:
         pass
