@@ -62,6 +62,7 @@ def check_login(username, password):
 
     cur.execute("SELECT password FROM users WHERE username=?", (username,))
     r = cur.fetchone()
+
     conn.close()
 
     if not r:
@@ -72,9 +73,7 @@ def check_login(username, password):
 
 # ---------------- BROADCAST ----------------
 
-async def broadcast(payload: dict):
-    msg = json.dumps(payload)
-
+async def broadcast(msg: str):
     dead = []
 
     async with clients_lock:
@@ -88,7 +87,7 @@ async def broadcast(payload: dict):
             clients.discard(d)
 
 
-# ---------------- WEBSOCKET ----------------
+# ---------------- WS ----------------
 
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
@@ -97,6 +96,7 @@ async def ws(websocket: WebSocket):
     user = None
 
     try:
+        # ---------------- LOGIN FIRST MESSAGE ----------------
         raw = await websocket.receive_text()
         data = json.loads(raw)
 
@@ -107,62 +107,44 @@ async def ws(websocket: WebSocket):
         # ---------------- REGISTER ----------------
         if action == "register":
             if user_exists(user):
-                await websocket.send_text(json.dumps({
-                    "type": "register",
-                    "status": "error",
-                    "message": "USER_EXISTS"
-                }))
+                await websocket.send_text("ERROR_USER_EXISTS")
                 await websocket.close()
                 return
 
             create_user(user, password)
 
-            await websocket.send_text(json.dumps({
-                "type": "register",
-                "status": "ok"
-            }))
-            await websocket.close()
-            return
+            await websocket.send_text("REGISTER_OK")
+            return  # ❗ no cerrar socket duro en algunos browsers
 
         # ---------------- LOGIN ----------------
         if not check_login(user, password):
-            await websocket.send_text(json.dumps({
-                "type": "login",
-                "status": "error",
-                "message": "INVALID_LOGIN"
-            }))
+            await websocket.send_text("ERROR_LOGIN")
             await websocket.close()
             return
 
         async with clients_lock:
             clients.add(websocket)
 
-        await websocket.send_text(json.dumps({
-            "type": "login",
-            "status": "ok",
-            "user": user
-        }))
+        await websocket.send_text("OK_LOGIN")
 
-        await broadcast({
-            "type": "system",
-            "message": f"{user} se conectó"
-        })
+        await broadcast(json.dumps({
+            "user": "SYSTEM",
+            "msg": f"{user} se conectó"
+        }))
 
         # ---------------- CHAT LOOP ----------------
         while True:
             msg = await websocket.receive_text()
 
-            await broadcast({
-                "type": "message",
+            await broadcast(json.dumps({
                 "user": user,
-                "message": msg
-            })
+                "msg": msg
+            }))
 
     except WebSocketDisconnect:
         pass
 
-    except Exception as e:
-        print("SERVER ERROR:", e)
+    except Exception:
         traceback.print_exc()
 
     finally:
@@ -170,7 +152,7 @@ async def ws(websocket: WebSocket):
             clients.discard(websocket)
 
         if user:
-            await broadcast({
-                "type": "system",
-                "message": f"{user} se desconectó"
-            })
+            await broadcast(json.dumps({
+                "user": "SYSTEM",
+                "msg": f"{user} se desconectó"
+            }))
