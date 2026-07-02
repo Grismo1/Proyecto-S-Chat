@@ -1,3 +1,4 @@
+print("######## VERSION NUEVA ########")
 # servidor.py
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 import json
