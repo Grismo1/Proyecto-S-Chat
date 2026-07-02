@@ -3,92 +3,64 @@ import json
 import asyncio
 import sqlite3
 import bcrypt
-import traceback
 
 app = FastAPI()
 
-DB_NAME = "chat.db"
-
 clients = set()
-clients_lock = asyncio.Lock()
+lock = asyncio.Lock()
 
+DB = "chat.db"
 
-# ---------------- DB ----------------
-
-def init_db():
-    conn = sqlite3.connect(DB_NAME)
+# ================= DB =================
+def init():
+    conn = sqlite3.connect(DB)
     cur = conn.cursor()
-
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS users (
+        CREATE TABLE IF NOT EXISTS users(
             username TEXT PRIMARY KEY,
-            password TEXT NOT NULL
+            password TEXT
         )
     """)
-
     conn.commit()
     conn.close()
 
-init_db()
+init()
 
-
-def user_exists(username):
-    conn = sqlite3.connect(DB_NAME)
+def create_user(u, p):
+    conn = sqlite3.connect(DB)
     cur = conn.cursor()
-    cur.execute("SELECT username FROM users WHERE username=?", (username,))
-    r = cur.fetchone()
-    conn.close()
-    return r is not None
-
-
-def create_user(username, password):
-    conn = sqlite3.connect(DB_NAME)
-    cur = conn.cursor()
-
-    hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-
-    cur.execute(
-        "INSERT INTO users(username,password) VALUES(?,?)",
-        (username, hashed)
-    )
-
+    hashed = bcrypt.hashpw(p.encode(), bcrypt.gensalt()).decode()
+    cur.execute("INSERT INTO users VALUES(?,?)", (u, hashed))
     conn.commit()
     conn.close()
 
-
-def check_login(username, password):
-    conn = sqlite3.connect(DB_NAME)
+def check_user(u, p):
+    conn = sqlite3.connect(DB)
     cur = conn.cursor()
-
-    cur.execute("SELECT password FROM users WHERE username=?", (username,))
-    r = cur.fetchone()
-
+    cur.execute("SELECT password FROM users WHERE username=?", (u,))
+    row = cur.fetchone()
     conn.close()
 
-    if not r:
+    if not row:
         return False
 
-    return bcrypt.checkpw(password.encode(), r[0].encode())
+    return bcrypt.checkpw(p.encode(), row[0].encode())
 
-
-# ---------------- BROADCAST ----------------
-
-async def broadcast(msg: str):
+# ================= BROADCAST =================
+async def broadcast(msg):
     dead = []
 
-    async with clients_lock:
+    async with lock:
         for c in clients:
             try:
-                await c.send_text(msg)
+                await c.send_text(json.dumps(msg))
             except:
                 dead.append(c)
 
         for d in dead:
             clients.discard(d)
 
-
-# ---------------- WS ----------------
-
+# ================= WS =================
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
     await websocket.accept()
@@ -96,7 +68,6 @@ async def ws(websocket: WebSocket):
     user = None
 
     try:
-        # ---------------- LOGIN FIRST MESSAGE ----------------
         raw = await websocket.receive_text()
         data = json.loads(raw)
 
@@ -104,55 +75,60 @@ async def ws(websocket: WebSocket):
         user = data.get("user")
         password = data.get("password")
 
-        # ---------------- REGISTER ----------------
+        # REGISTER
         if action == "register":
-            if user_exists(user):
-                await websocket.send_text("ERROR_USER_EXISTS")
-                await websocket.close()
-                return
-
             create_user(user, password)
 
-            await websocket.send_text("REGISTER_OK")
-            return  # ❗ no cerrar socket duro en algunos browsers
-
-        # ---------------- LOGIN ----------------
-        if not check_login(user, password):
-            await websocket.send_text("ERROR_LOGIN")
+            await websocket.send_text(json.dumps({
+                "type": "system",
+                "msg": "REGISTER_OK"
+            }))
             await websocket.close()
             return
 
-        async with clients_lock:
+        # LOGIN
+        if not check_user(user, password):
+            await websocket.send_text(json.dumps({
+                "type": "system",
+                "msg": "ERROR_LOGIN"
+            }))
+            await websocket.close()
+            return
+
+        async with lock:
             clients.add(websocket)
 
-        await websocket.send_text("OK_LOGIN")
-
-        await broadcast(json.dumps({
-            "user": "SYSTEM",
-            "msg": f"{user} se conectó"
+        await websocket.send_text(json.dumps({
+            "type": "system",
+            "msg": "OK_LOGIN"
         }))
 
-        # ---------------- CHAT LOOP ----------------
+        await broadcast({
+            "type": "system",
+            "user": "SYSTEM",
+            "msg": f"{user} se conectó"
+        })
+
         while True:
             msg = await websocket.receive_text()
+            data = json.loads(msg)
 
-            await broadcast(json.dumps({
-                "user": user,
-                "msg": msg
-            }))
+            await broadcast({
+                "type": "chat",
+                "user": data["user"],
+                "msg": data["msg"]
+            })
 
     except WebSocketDisconnect:
         pass
 
-    except Exception:
-        traceback.print_exc()
-
     finally:
-        async with clients_lock:
+        async with lock:
             clients.discard(websocket)
 
         if user:
-            await broadcast(json.dumps({
+            await broadcast({
+                "type": "system",
                 "user": "SYSTEM",
                 "msg": f"{user} se desconectó"
-            }))
+            })
