@@ -1,3 +1,4 @@
+# servidor.py
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 import json
 import asyncio
@@ -6,77 +7,59 @@ import bcrypt
 
 app = FastAPI()
 
-DB_NAME = "chat.db"
-
 clients = set()
-clients_lock = asyncio.Lock()
+lock = asyncio.Lock()
 
-
-# ================= DB =================
+# ---------------- DB ----------------
 
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect("chat.db")
     cur = conn.cursor()
-
     cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
             username TEXT PRIMARY KEY,
             password TEXT NOT NULL
         )
     """)
-
     conn.commit()
     conn.close()
 
 init_db()
 
-
-def user_exists(username):
-    conn = sqlite3.connect(DB_NAME)
+def user_exists(u):
+    conn = sqlite3.connect("chat.db")
     cur = conn.cursor()
-    cur.execute("SELECT username FROM users WHERE username=?", (username,))
+    cur.execute("SELECT 1 FROM users WHERE username=?", (u,))
     r = cur.fetchone()
     conn.close()
     return r is not None
 
-
-def create_user(username, password):
-    conn = sqlite3.connect(DB_NAME)
+def create_user(u, p):
+    conn = sqlite3.connect("chat.db")
     cur = conn.cursor()
-
-    hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-
-    cur.execute(
-        "INSERT INTO users(username,password) VALUES(?,?)",
-        (username, hashed)
-    )
-
+    hashed = bcrypt.hashpw(p.encode(), bcrypt.gensalt()).decode()
+    cur.execute("INSERT INTO users VALUES (?,?)", (u, hashed))
     conn.commit()
     conn.close()
 
-
-def check_login(username, password):
-    conn = sqlite3.connect(DB_NAME)
+def check_login(u, p):
+    conn = sqlite3.connect("chat.db")
     cur = conn.cursor()
-
-    cur.execute("SELECT password FROM users WHERE username=?", (username,))
+    cur.execute("SELECT password FROM users WHERE username=?", (u,))
     r = cur.fetchone()
     conn.close()
 
     if not r:
         return False
+    return bcrypt.checkpw(p.encode(), r[0].encode())
 
-    return bcrypt.checkpw(password.encode(), r[0].encode())
 
+# ---------------- BROADCAST ----------------
 
-# ================= BROADCAST =================
-
-async def broadcast(data: dict):
-    dead = []
-
+async def broadcast(data):
     msg = json.dumps(data)
-
-    async with clients_lock:
+    async with lock:
+        dead = []
         for c in clients:
             try:
                 await c.send_text(msg)
@@ -87,55 +70,46 @@ async def broadcast(data: dict):
             clients.discard(d)
 
 
-# ================= WEBSOCKET =================
+# ---------------- WS ----------------
 
 @app.websocket("/ws")
-async def ws(websocket: WebSocket):
-    await websocket.accept()
+async def ws(ws: WebSocket):
+    await ws.accept()
 
     user = None
 
     try:
-        raw = await websocket.receive_text()
-
+        raw = await ws.receive_text()
         data = json.loads(raw)
+
         action = data.get("action")
         user = data.get("user")
         password = data.get("password")
 
-        # -------- REGISTER --------
         if action == "register":
             if user_exists(user):
-                await websocket.send_text("ERROR_USER_EXISTS")
-                await websocket.close()
+                await ws.send_text("ERROR_USER_EXISTS")
                 return
-
             create_user(user, password)
-
-            await websocket.send_text("REGISTER_OK")
-            await websocket.close()
+            await ws.send_text("REGISTER_OK")
             return
 
-        # -------- LOGIN --------
         if not check_login(user, password):
-            await websocket.send_text("ERROR_LOGIN")
-            await websocket.close()
+            await ws.send_text("ERROR_LOGIN")
             return
 
-        async with clients_lock:
-            clients.add(websocket)
+        async with lock:
+            clients.add(ws)
 
-        await websocket.send_text("OK_LOGIN")
+        await ws.send_text("OK_LOGIN")
 
         await broadcast({
             "user": "SYSTEM",
             "msg": f"{user} se conectó"
         })
 
-        # -------- CHAT LOOP --------
         while True:
-            msg = await websocket.receive_text()
-
+            msg = await ws.receive_text()
             await broadcast({
                 "user": user,
                 "msg": msg
@@ -145,8 +119,8 @@ async def ws(websocket: WebSocket):
         pass
 
     finally:
-        async with clients_lock:
-            clients.discard(websocket)
+        async with lock:
+            clients.discard(ws)
 
         if user:
             await broadcast({
