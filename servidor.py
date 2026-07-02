@@ -51,23 +51,23 @@ async def websocket_endpoint(ws: WebSocket):
 
         # LOOP PRINCIPAL
         while True:
-            raw = await ws.receive_text()
+    raw = await ws.receive_text()
 
-            try:
-                data = json.loads(raw)
+    try:
+        data = json.loads(raw)
 
-                if isinstance(data, dict):
-                    texto = data.get("msg", "")
-                else:
-                    texto = raw
+        if isinstance(data, dict):
+            texto = data.get("msg", "")
+        else:
+            texto = raw
 
-            except Exception:
-                texto = raw
+    except Exception:
+        texto = raw
 
-            await broadcast({
-                "user": user,
-                "msg": texto
-            })
+    await broadcast({
+        "user": user,
+        "msg": texto
+    })
 
     except WebSocketDisconnect:
         clients.remove(ws)
