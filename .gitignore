@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+
+build/
+dist/
+
+chat.db
+
+.env
+
+.vscode/
+
+.idea/
