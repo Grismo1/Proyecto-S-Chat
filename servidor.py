@@ -1,35 +1,25 @@
 import json
 import sqlite3
 import bcrypt
-
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 app = FastAPI()
 
-# ---------------------------
-# CONEXIONES ACTIVAS
-# ---------------------------
-
 clients = set()
 
-# ---------------------------
-# BASE DE DATOS
-# ---------------------------
+# ---------------- DB ----------------
 
 def init_db():
     conn = sqlite3.connect("chat.db")
     cur = conn.cursor()
-
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS users(
+        CREATE TABLE IF NOT EXISTS users (
             username TEXT PRIMARY KEY,
             password TEXT NOT NULL
         )
     """)
-
     conn.commit()
     conn.close()
-
 
 init_db()
 
@@ -37,32 +27,18 @@ init_db()
 def user_exists(username):
     conn = sqlite3.connect("chat.db")
     cur = conn.cursor()
-
-    cur.execute(
-        "SELECT username FROM users WHERE username=?",
-        (username,)
-    )
-
-    row = cur.fetchone()
-
+    cur.execute("SELECT 1 FROM users WHERE username=?", (username,))
+    exists = cur.fetchone()
     conn.close()
-
-    return row is not None
+    return exists is not None
 
 
 def create_user(username, password):
-    hashed = bcrypt.hashpw(
-        password.encode(),
-        bcrypt.gensalt()
-    ).decode()
-
     conn = sqlite3.connect("chat.db")
     cur = conn.cursor()
 
-    cur.execute(
-        "INSERT INTO users(username,password) VALUES(?,?)",
-        (username, hashed)
-    )
+    hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    cur.execute("INSERT INTO users VALUES (?,?)", (username, hashed))
 
     conn.commit()
     conn.close()
@@ -71,114 +47,109 @@ def create_user(username, password):
 def check_login(username, password):
     conn = sqlite3.connect("chat.db")
     cur = conn.cursor()
-
-    cur.execute(
-        "SELECT password FROM users WHERE username=?",
-        (username,)
-    )
-
+    cur.execute("SELECT password FROM users WHERE username=?", (username,))
     row = cur.fetchone()
-
     conn.close()
 
-    if row is None:
+    if not row:
         return False
 
-    return bcrypt.checkpw(
-        password.encode(),
-        row[0].encode()
-    )
+    return bcrypt.checkpw(password.encode(), row[0].encode())
 
 
-# ---------------------------
-# BROADCAST
-# ---------------------------
+# ---------------- BROADCAST ----------------
 
-async def broadcast(message):
+async def broadcast(message: dict):
     dead = []
 
-    for client in clients:
+    for c in clients:
         try:
-            await client.send_text(json.dumps(message))
-        except Exception:
-            dead.append(client)
+            await c.send_text(json.dumps(message))
+        except:
+            dead.append(c)
 
-    for client in dead:
-        clients.discard(client)
+    for c in dead:
+        clients.discard(c)
 
 
-# ---------------------------
-# WEBSOCKET
-# ---------------------------
+# ---------------- WS ----------------
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
-
     await ws.accept()
 
     user = None
 
     try:
-
-        # LOGIN O REGISTER
+        # 1) primera conexión (login/register)
         raw = await ws.receive_text()
         data = json.loads(raw)
 
         action = data.get("action")
-        user = data.get("user")
+        username = data.get("user")
         password = data.get("password")
 
         if action == "register":
 
-            if user_exists(user):
-                await ws.send_text("ERROR_USER_EXISTS")
+            if user_exists(username):
+                await ws.send_text(json.dumps({
+                    "type": "error",
+                    "msg": "Ese usuario ya existe"
+                }))
                 return
 
-            create_user(user, password)
+            create_user(username, password)
 
-            await ws.send_text("REGISTER_OK")
+            await ws.send_text(json.dumps({
+                "type": "ok",
+                "msg": "Usuario registrado correctamente. Ahora inicia sesión."
+            }))
             return
 
-        if not check_login(user, password):
-            await ws.send_text("ERROR_LOGIN")
-            return
+        if action == "login":
 
-        await ws.send_text("OK_LOGIN")
+            if not check_login(username, password):
+                await ws.send_text(json.dumps({
+                    "type": "error",
+                    "msg": "Usuario o contraseña incorrectos"
+                }))
+                return
 
-        clients.add(ws)
+            user = username
 
-        await broadcast({
-            "user": "SYSTEM",
-            "msg": f"{user} se conectó"
-        })
+            clients.add(ws)
 
-        # CHAT
+            await ws.send_text(json.dumps({
+                "type": "ok_login",
+                "msg": "Login correcto. Bienvenido al chat."
+            }))
+
+            await broadcast({
+                "user": "SYSTEM",
+                "msg": f"{user} se conectó"
+            })
+
+        # 2) chat loop
         while True:
-
             raw = await ws.receive_text()
 
             try:
                 data = json.loads(raw)
-
-                if isinstance(data, dict):
-                    texto = data.get("msg", "")
-                else:
-                    texto = raw
-
-            except Exception:
-                texto = raw
+                msg = data.get("msg", "")
+            except:
+                msg = raw
 
             await broadcast({
                 "user": user,
-                "msg": texto
+                "msg": msg
             })
 
     except WebSocketDisconnect:
         pass
 
     finally:
-
-        clients.discard(ws)
+        if ws in clients:
+            clients.remove(ws)
 
         if user:
             await broadcast({
