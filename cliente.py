@@ -5,22 +5,20 @@ import hashlib
 
 from colorama import init
 
-# 🔥 IMPORTANTE: habilita ANSI en CMD viejo
 init()
 
 URI = "wss://proyecto-s-chat.onrender.com/ws"
 
-
 # ---------------- COLORS ----------------
 
 COLORS = [
-    "\033[91m",  # rojo
-    "\033[92m",  # verde
-    "\033[93m",  # amarillo
-    "\033[94m",  # azul
-    "\033[95m",  # magenta
-    "\033[96m",  # cyan
-    "\033[97m",  # blanco
+    "\033[91m",
+    "\033[92m",
+    "\033[93m",
+    "\033[94m",
+    "\033[95m",
+    "\033[96m",
+    "\033[97m",
 ]
 
 RESET = "\033[0m"
@@ -41,16 +39,16 @@ async def receiver(ws):
             try:
                 data = json.loads(msg)
 
-                user = data.get("user")
-                text = data.get("msg")
+                user = data.get("user", "SYSTEM")
+                text = data.get("msg", "")
 
-                if user == "SYSTEM":
+                if user.upper() == "SYSTEM":
                     print(f"\n⚙ {text}")
                 else:
                     color = get_color(user)
                     print(f"\n{color}{user}{RESET}: {text}")
 
-            except json.JSONDecodeError:
+            except Exception:
                 print("\nSERVER:", msg)
 
     except Exception as e:
@@ -60,7 +58,7 @@ async def receiver(ws):
 # ---------------- SENDER ----------------
 
 async def sender(ws):
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     while True:
         msg = await loop.run_in_executor(None, input)
@@ -68,7 +66,9 @@ async def sender(ws):
         if not msg.strip():
             continue
 
-        await ws.send(msg)
+        await ws.send(json.dumps({
+            "msg": msg
+        }))
 
 
 # ---------------- MAIN ----------------
@@ -79,44 +79,69 @@ async def main():
 
         async with websockets.connect(URI) as ws:
 
-            print("\n1 - Login\n2 - Registrarse\n")
+            print("\n1 - Login")
+            print("2 - Registrarse\n")
+
             option = input("> ").strip()
 
-            user = input("Usuario: ")
-            password = input("Contraseña: ")
+            user = input("Usuario: ").strip()
+            password = input("Contraseña: ").strip()
+
+            # ---------------- REGISTER ----------------
 
             if option == "2":
+
                 await ws.send(json.dumps({
                     "action": "register",
                     "user": user,
                     "password": password
                 }))
 
-                resp = await ws.recv()
-                print("REGISTER:", resp)
+                raw = await ws.recv()
+                print("SERVER:", raw)
 
-                if resp != "REGISTER_OK":
+                try:
+                    resp = json.loads(raw)
+                except:
+                    print("Respuesta inválida del servidor.")
                     input("ENTER para salir...")
                     return
 
-                print("✔ Usuario creado. Ahora logueate.")
+                if resp.get("type") != "ok_register":
+                    print(resp.get("msg", "Registro rechazado"))
+                    input("ENTER para salir...")
+                    return
+
+                print("✔ Usuario creado correctamente.")
+                input("ENTER para salir...")
                 return
 
             # ---------------- LOGIN ----------------
+
             await ws.send(json.dumps({
                 "action": "login",
                 "user": user,
                 "password": password
             }))
 
-            resp = await ws.recv()
-            print("LOGIN:", resp)
+            raw = await ws.recv()
 
-            if resp != "OK_LOGIN":
+            print("SERVER:", raw)
+
+            try:
+                resp = json.loads(raw)
+            except:
+                print("Respuesta inválida del servidor.")
                 input("ENTER para salir...")
                 return
 
-            print("\n💬 Chat listo...\n")
+            if resp.get("type") != "ok_login":
+                print(resp.get("msg", "Login incorrecto"))
+                input("ENTER para salir...")
+                return
+
+            print("\n✅ Login correcto.")
+            print("💬 Chat listo.\n")
 
             await asyncio.gather(
                 receiver(ws),
@@ -128,4 +153,5 @@ async def main():
         input("ENTER para salir...")
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
