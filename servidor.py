@@ -7,30 +7,36 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 app = FastAPI()
 
 
-clients = {}
+clients = set()
 
-# username : websocket
+active_users = set()
 
 
-# ---------------- DB ----------------
+# ================= DB =================
 
 
 def init_db():
 
     conn = sqlite3.connect("chat.db")
+
     cur = conn.cursor()
 
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS messages (
+
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+
             username TEXT NOT NULL,
+
             message TEXT NOT NULL
+
         )
     """)
 
 
     conn.commit()
+
     conn.close()
 
 
@@ -39,12 +45,15 @@ init_db()
 
 
 
-# ---------------- MENSAJES ----------------
+
+
+# ================= MENSAJES =================
 
 
 def save_message(username, message):
 
     conn = sqlite3.connect("chat.db")
+
     cur = conn.cursor()
 
 
@@ -61,7 +70,9 @@ def save_message(username, message):
 
 
     conn.commit()
+
     conn.close()
+
 
 
 
@@ -70,6 +81,7 @@ def save_message(username, message):
 def get_history(limit=500):
 
     conn = sqlite3.connect("chat.db")
+
     cur = conn.cursor()
 
 
@@ -93,19 +105,25 @@ def get_history(limit=500):
     rows.reverse()
 
 
+
     return [
+
         {
-            "user": r[0],
-            "msg": r[1]
+            "user": row[0],
+            "msg": row[1]
         }
-        for r in rows
+
+        for row in rows
+
     ]
 
 
 
 
 
-# ---------------- BROADCAST ----------------
+
+# ================= BROADCAST =================
+
 
 
 async def broadcast(message):
@@ -113,38 +131,36 @@ async def broadcast(message):
     dead = []
 
 
-    for ws in clients.values():
+    for client in clients:
 
         try:
 
-            await ws.send_text(
+            await client.send_text(
                 json.dumps(message)
             )
 
 
         except:
 
-            dead.append(ws)
+            dead.append(client)
 
 
 
-    for ws in dead:
+    for client in dead:
 
-        for user, socket in list(clients.items()):
-
-            if socket == ws:
-
-                del clients[user]
+        clients.discard(client)
 
 
 
 
 
-# ---------------- WEBSOCKET ----------------
+# ================= WEBSOCKET =================
+
 
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
+
 
     await ws.accept()
 
@@ -152,120 +168,159 @@ async def websocket_endpoint(ws: WebSocket):
     user = None
 
 
+
     try:
 
 
         # Primera comunicación
+
         raw = await ws.receive_text()
+
 
         data = json.loads(raw)
 
 
         action = data.get("action")
+
         username = data.get("user")
 
 
 
-        if action != "join":
+
+
+        # ================= JOIN =================
+
+
+        if action == "join":
+
+
+
+            if not username:
+
+
+                await ws.send_text(
+                    json.dumps({
+
+                        "type":"error",
+
+                        "msg":"Usuario invalido"
+
+                    })
+                )
+
+                return
+
+
+
+
+
+
+            if username in active_users:
+
+
+
+                await ws.send_text(
+                    json.dumps({
+
+                        "type":"error",
+
+                        "msg":"Ese usuario ya esta conectado"
+
+                    })
+                )
+
+
+                return
+
+
+
+
+
+
+
+            user = username
+
+
+
+            active_users.add(user)
+
+
+            clients.add(ws)
+
+
+
+
 
             await ws.send_text(
                 json.dumps({
-                    "type":"error",
-                    "msg":"Acción inválida"
+
+                    "type":"joined",
+
+                    "msg":"Entraste al chat"
+
                 })
             )
 
-            return
 
 
 
 
-        if not username or username.strip() == "":
+            # Mandar historial
 
             await ws.send_text(
                 json.dumps({
-                    "type":"error",
-                    "msg":"Nombre inválido"
-                })
-            )
 
-            return
+                    "type":"history",
 
+                    "messages":get_history(500)
 
-
-
-        username = username.strip()
-
-
-
-        # Usuario ocupado
-
-        if username in clients:
-
-
-            await ws.send_text(
-                json.dumps({
-                    "type":"error",
-                    "msg":"Ese usuario ya está conectado"
                 })
             )
 
 
-            return
 
 
 
 
 
-        user = username
+            await broadcast({
 
+                "user":"SYSTEM",
 
-        clients[user] = ws
+                "msg":f"{user} se conecto"
 
-
-
-
-        # Confirmación
-
-        await ws.send_text(
-            json.dumps({
-                "type":"joined",
-                "msg":"Entraste al chat"
             })
-        )
 
 
 
 
 
-        # Historial
-
-        await ws.send_text(
-            json.dumps({
-                "type":"history",
-                "messages":get_history(500)
-            })
-        )
 
 
 
+        else:
 
 
-        # Aviso
+            await ws.send_text(
+                json.dumps({
 
-        await broadcast({
+                    "type":"error",
 
-            "user":"SYSTEM",
+                    "msg":"Accion desconocida"
 
-            "msg":f"{user} se conectó"
+                })
+            )
 
-        })
+            return
 
 
 
 
 
-        # CHAT LOOP
+
+
+        # ================= CHAT =================
+
 
 
         while True:
@@ -277,12 +332,17 @@ async def websocket_endpoint(ws: WebSocket):
 
             try:
 
+
                 data = json.loads(raw)
 
-                msg = data.get("msg","")
+                msg = data.get(
+                    "msg",
+                    ""
+                )
 
 
             except:
+
 
                 msg = raw
 
@@ -290,9 +350,15 @@ async def websocket_endpoint(ws: WebSocket):
 
 
 
-            if msg.strip() == "":
+
+            msg = msg.strip()
+
+
+
+            if msg == "":
 
                 continue
+
 
 
 
@@ -302,6 +368,9 @@ async def websocket_endpoint(ws: WebSocket):
                 user,
                 msg
             )
+
+
+
 
 
 
@@ -317,28 +386,40 @@ async def websocket_endpoint(ws: WebSocket):
 
 
 
+
+
     except WebSocketDisconnect:
 
+
         pass
+
+
 
 
 
     finally:
 
 
-        if user in clients:
 
-            del clients[user]
+        if ws in clients:
+
+            clients.remove(ws)
+
+
 
 
 
         if user:
 
 
+            active_users.discard(user)
+
+
+
             await broadcast({
 
                 "user":"SYSTEM",
 
-                "msg":f"{user} se desconectó"
+                "msg":f"{user} se desconecto"
 
             })
