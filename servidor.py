@@ -9,7 +9,8 @@ app = FastAPI()
 
 clients = set()
 
-active_users = set()
+# websocket -> username
+active_users = {}
 
 
 
@@ -48,7 +49,6 @@ init_db()
 
 
 
-
 # ================= MENSAJES =================
 
 
@@ -79,7 +79,6 @@ def save_message(username, message):
 
 
 
-
 def get_history(limit=500):
 
     conn = sqlite3.connect("chat.db")
@@ -102,7 +101,6 @@ def get_history(limit=500):
 
 
     conn.close()
-
 
 
     rows.reverse()
@@ -149,11 +147,11 @@ async def broadcast(message):
 
 
 
-
     for client in dead:
 
         clients.discard(client)
 
+        active_users.pop(client, None)
 
 
 
@@ -163,13 +161,16 @@ async def broadcast(message):
 
 async def send_online_users():
 
+
     await broadcast({
 
-        "type": "users",
+        "type":"users",
 
-        "users": list(active_users)
+        "users":list(active_users.values())
 
     })
+
+
 
 
 
@@ -195,7 +196,6 @@ async def websocket_endpoint(ws: WebSocket):
     try:
 
 
-
         raw = await ws.receive_text()
 
 
@@ -205,6 +205,7 @@ async def websocket_endpoint(ws: WebSocket):
         action = data.get("action")
 
         username = data.get("user")
+
 
 
 
@@ -238,7 +239,11 @@ async def websocket_endpoint(ws: WebSocket):
 
 
 
-            if username in active_users:
+
+            # comprobar usuario conectado
+
+
+            if username in active_users.values():
 
 
 
@@ -264,10 +269,12 @@ async def websocket_endpoint(ws: WebSocket):
 
 
 
-            active_users.add(user)
-
-
             clients.add(ws)
+
+
+            active_users[ws] = user
+
+
 
 
 
@@ -285,6 +292,11 @@ async def websocket_endpoint(ws: WebSocket):
 
 
 
+
+
+
+
+            # mandar historial
 
 
             await ws.send_text(
@@ -312,6 +324,9 @@ async def websocket_endpoint(ws: WebSocket):
 
 
 
+
+
+            # actualizar lista online
 
 
             await send_online_users()
@@ -357,7 +372,6 @@ async def websocket_endpoint(ws: WebSocket):
 
 
 
-
             try:
 
 
@@ -370,11 +384,11 @@ async def websocket_endpoint(ws: WebSocket):
                 )
 
 
-
             except:
 
 
                 msg = raw
+
 
 
 
@@ -387,6 +401,7 @@ async def websocket_endpoint(ws: WebSocket):
             if msg == "":
 
                 continue
+
 
 
 
@@ -417,11 +432,11 @@ async def websocket_endpoint(ws: WebSocket):
 
 
 
-
     except WebSocketDisconnect:
 
 
         pass
+
 
 
 
@@ -440,10 +455,16 @@ async def websocket_endpoint(ws: WebSocket):
 
 
 
-        if user:
+
+        if ws in active_users:
 
 
-            active_users.discard(user)
+            disconnected_user = active_users[ws]
+
+
+            del active_users[ws]
+
+
 
 
 
@@ -451,9 +472,11 @@ async def websocket_endpoint(ws: WebSocket):
 
                 "user":"SYSTEM",
 
-                "msg":f"{user} se desconecto"
+                "msg":f"{disconnected_user} se desconecto"
 
             })
+
+
 
 
 
