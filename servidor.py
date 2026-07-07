@@ -1,27 +1,26 @@
 import json
 import sqlite3
-import bcrypt
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+
 
 app = FastAPI()
 
-clients = set()
+
+clients = {}
+
+# username : websocket
+
 
 # ---------------- DB ----------------
 
+
 def init_db():
+
     conn = sqlite3.connect("chat.db")
     cur = conn.cursor()
 
-    # Usuarios
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            username TEXT PRIMARY KEY,
-            password TEXT NOT NULL
-        )
-    """)
 
-    # Historial de mensajes
     cur.execute("""
         CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,94 +29,53 @@ def init_db():
         )
     """)
 
+
     conn.commit()
     conn.close()
+
 
 
 init_db()
 
 
-def user_exists(username):
-    conn = sqlite3.connect("chat.db")
-    cur = conn.cursor()
-
-    cur.execute(
-        "SELECT 1 FROM users WHERE username=?",
-        (username,)
-    )
-
-    exists = cur.fetchone()
-
-    conn.close()
-
-    return exists is not None
-
-
-def create_user(username, password):
-    conn = sqlite3.connect("chat.db")
-    cur = conn.cursor()
-
-    hashed = bcrypt.hashpw(
-        password.encode(),
-        bcrypt.gensalt()
-    ).decode()
-
-    cur.execute(
-        "INSERT INTO users VALUES (?,?)",
-        (username, hashed)
-    )
-
-    conn.commit()
-    conn.close()
-
-
-def check_login(username, password):
-    conn = sqlite3.connect("chat.db")
-    cur = conn.cursor()
-
-    cur.execute(
-        "SELECT password FROM users WHERE username=?",
-        (username,)
-    )
-
-    row = cur.fetchone()
-
-    conn.close()
-
-    if not row:
-        return False
-
-    return bcrypt.checkpw(
-        password.encode(),
-        row[0].encode()
-    )
-
 
 # ---------------- MENSAJES ----------------
 
+
 def save_message(username, message):
+
     conn = sqlite3.connect("chat.db")
     cur = conn.cursor()
 
+
     cur.execute(
         """
-        INSERT INTO messages (username, message)
+        INSERT INTO messages(username,message)
         VALUES (?,?)
         """,
-        (username, message)
+        (
+            username,
+            message
+        )
     )
+
 
     conn.commit()
     conn.close()
 
 
+
+
+
 def get_history(limit=500):
+
     conn = sqlite3.connect("chat.db")
     cur = conn.cursor()
 
+
     cur.execute(
         """
-        SELECT username, message
+        SELECT username,message
         FROM messages
         ORDER BY id DESC
         LIMIT ?
@@ -125,154 +83,238 @@ def get_history(limit=500):
         (limit,)
     )
 
+
     rows = cur.fetchall()
+
 
     conn.close()
 
-    # Los invertimos para mostrar del más viejo al más nuevo
+
     rows.reverse()
+
 
     return [
         {
-            "user": row[0],
-            "msg": row[1]
+            "user": r[0],
+            "msg": r[1]
         }
-        for row in rows
+        for r in rows
     ]
+
+
+
 
 
 # ---------------- BROADCAST ----------------
 
-async def broadcast(message: dict):
+
+async def broadcast(message):
+
     dead = []
 
-    for c in clients:
-        try:
-            await c.send_text(json.dumps(message))
-        except:
-            dead.append(c)
 
-    for c in dead:
-        clients.discard(c)
+    for ws in clients.values():
+
+        try:
+
+            await ws.send_text(
+                json.dumps(message)
+            )
+
+
+        except:
+
+            dead.append(ws)
+
+
+
+    for ws in dead:
+
+        for user, socket in list(clients.items()):
+
+            if socket == ws:
+
+                del clients[user]
+
+
+
 
 
 # ---------------- WEBSOCKET ----------------
+
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
 
     await ws.accept()
 
+
     user = None
+
 
     try:
 
-        # Primera comunicación: login/register
+
+        # Primera comunicación
         raw = await ws.receive_text()
 
         data = json.loads(raw)
 
+
         action = data.get("action")
         username = data.get("user")
-        password = data.get("password")
 
 
-        # ---------- REGISTER ----------
 
-        if action == "register":
+        if action != "join":
 
-            if user_exists(username):
-
-                await ws.send_text(json.dumps({
-                    "type": "error",
-                    "msg": "Ese usuario ya existe"
-                }))
-
-                return
-
-
-            create_user(username, password)
-
-
-            await ws.send_text(json.dumps({
-                "type": "ok",
-                "msg": "Usuario registrado correctamente. Ahora inicia sesión."
-            }))
+            await ws.send_text(
+                json.dumps({
+                    "type":"error",
+                    "msg":"Acción inválida"
+                })
+            )
 
             return
 
 
 
-        # ---------- LOGIN ----------
 
-        if action == "login":
+        if not username or username.strip() == "":
 
-            if not check_login(username, password):
+            await ws.send_text(
+                json.dumps({
+                    "type":"error",
+                    "msg":"Nombre inválido"
+                })
+            )
 
-                await ws.send_text(json.dumps({
-                    "type": "error",
-                    "msg": "Usuario o contraseña incorrectos"
-                }))
-
-                return
-
-
-            user = username
-
-            clients.add(ws)
+            return
 
 
-            # Confirmación login
-            await ws.send_text(json.dumps({
-                "type": "ok_login",
-                "msg": "Login correcto. Bienvenido al chat."
-            }))
 
 
-            # Enviar historial de últimos 500 mensajes
-            await ws.send_text(json.dumps({
-                "type": "history",
-                "messages": get_history(500)
-            }))
+        username = username.strip()
 
 
-            # Aviso de conexión
-            await broadcast({
-                "user": "SYSTEM",
-                "msg": f"{user} se conectó"
+
+        # Usuario ocupado
+
+        if username in clients:
+
+
+            await ws.send_text(
+                json.dumps({
+                    "type":"error",
+                    "msg":"Ese usuario ya está conectado"
+                })
+            )
+
+
+            return
+
+
+
+
+
+        user = username
+
+
+        clients[user] = ws
+
+
+
+
+        # Confirmación
+
+        await ws.send_text(
+            json.dumps({
+                "type":"joined",
+                "msg":"Entraste al chat"
             })
+        )
 
 
 
-        # ---------- CHAT LOOP ----------
+
+
+        # Historial
+
+        await ws.send_text(
+            json.dumps({
+                "type":"history",
+                "messages":get_history(500)
+            })
+        )
+
+
+
+
+
+        # Aviso
+
+        await broadcast({
+
+            "user":"SYSTEM",
+
+            "msg":f"{user} se conectó"
+
+        })
+
+
+
+
+
+        # CHAT LOOP
+
 
         while True:
 
+
             raw = await ws.receive_text()
+
+
 
             try:
 
                 data = json.loads(raw)
-                msg = data.get("msg", "")
+
+                msg = data.get("msg","")
+
 
             except:
 
                 msg = raw
 
 
+
+
+
             if msg.strip() == "":
+
                 continue
 
 
-            # Guardar mensaje en historial
-            save_message(user, msg)
 
 
-            # Mandar a todos
+
+            save_message(
+                user,
+                msg
+            )
+
+
+
             await broadcast({
-                "user": user,
-                "msg": msg
+
+                "user":user,
+
+                "msg":msg
+
             })
+
+
+
 
 
     except WebSocketDisconnect:
@@ -280,15 +322,23 @@ async def websocket_endpoint(ws: WebSocket):
         pass
 
 
+
     finally:
 
-        if ws in clients:
-            clients.remove(ws)
+
+        if user in clients:
+
+            del clients[user]
+
 
 
         if user:
 
+
             await broadcast({
-                "user": "SYSTEM",
-                "msg": f"{user} se desconectó"
+
+                "user":"SYSTEM",
+
+                "msg":f"{user} se desconectó"
+
             })
