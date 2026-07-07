@@ -185,22 +185,22 @@ async def send_online_users():
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
 
-
     await ws.accept()
 
+    # Confirmar al cliente que el WebSocket ya está listo
+    await ws.send_text(
+        json.dumps({
+            "type": "connected"
+        })
+    )
 
     user = None
 
-
-
     try:
-
 
         raw = await ws.receive_text()
 
-
         data = json.loads(raw)
-
 
         action = data.get("action")
 
