@@ -12,6 +12,7 @@ clients = set()
 active_users = set()
 
 
+
 # ================= DB =================
 
 
@@ -42,6 +43,7 @@ def init_db():
 
 
 init_db()
+
 
 
 
@@ -102,6 +104,7 @@ def get_history(limit=500):
     conn.close()
 
 
+
     rows.reverse()
 
 
@@ -146,9 +149,29 @@ async def broadcast(message):
 
 
 
+
     for client in dead:
 
         clients.discard(client)
+
+
+
+
+
+
+
+
+async def send_online_users():
+
+    await broadcast({
+
+        "type": "users",
+
+        "users": list(active_users)
+
+    })
+
+
 
 
 
@@ -172,7 +195,6 @@ async def websocket_endpoint(ws: WebSocket):
     try:
 
 
-        # Primera comunicación
 
         raw = await ws.receive_text()
 
@@ -189,6 +211,7 @@ async def websocket_endpoint(ws: WebSocket):
 
 
         # ================= JOIN =================
+
 
 
         if action == "join":
@@ -208,8 +231,8 @@ async def websocket_endpoint(ws: WebSocket):
                     })
                 )
 
-                return
 
+                return
 
 
 
@@ -237,7 +260,6 @@ async def websocket_endpoint(ws: WebSocket):
 
 
 
-
             user = username
 
 
@@ -246,7 +268,6 @@ async def websocket_endpoint(ws: WebSocket):
 
 
             clients.add(ws)
-
 
 
 
@@ -265,7 +286,6 @@ async def websocket_endpoint(ws: WebSocket):
 
 
 
-            # Mandar historial
 
             await ws.send_text(
                 json.dumps({
@@ -276,7 +296,6 @@ async def websocket_endpoint(ws: WebSocket):
 
                 })
             )
-
 
 
 
@@ -295,10 +314,16 @@ async def websocket_endpoint(ws: WebSocket):
 
 
 
+            await send_online_users()
+
+
+
+
 
 
 
         else:
+
 
 
             await ws.send_text(
@@ -310,6 +335,7 @@ async def websocket_endpoint(ws: WebSocket):
 
                 })
             )
+
 
             return
 
@@ -326,7 +352,9 @@ async def websocket_endpoint(ws: WebSocket):
         while True:
 
 
+
             raw = await ws.receive_text()
+
 
 
 
@@ -335,17 +363,18 @@ async def websocket_endpoint(ws: WebSocket):
 
                 data = json.loads(raw)
 
+
                 msg = data.get(
                     "msg",
                     ""
                 )
 
 
+
             except:
 
 
                 msg = raw
-
 
 
 
@@ -358,7 +387,6 @@ async def websocket_endpoint(ws: WebSocket):
             if msg == "":
 
                 continue
-
 
 
 
@@ -388,10 +416,13 @@ async def websocket_endpoint(ws: WebSocket):
 
 
 
+
+
     except WebSocketDisconnect:
 
 
         pass
+
 
 
 
@@ -423,3 +454,7 @@ async def websocket_endpoint(ws: WebSocket):
                 "msg":f"{user} se desconecto"
 
             })
+
+
+
+            await send_online_users()
