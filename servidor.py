@@ -199,11 +199,7 @@ async def websocket_endpoint(ws: WebSocket):
     try:
 
         raw = await ws.receive_text()
-        
-        print("PRIMER MENSAJE")
-        print(raw)
 
-       
         data = json.loads(raw)
 
         action = data.get("action")
@@ -373,9 +369,7 @@ async def websocket_endpoint(ws: WebSocket):
 
 
             raw = await ws.receive_text()
-            
-            print("MENSAJE DEL CHAT")
-            print(raw)
+
 
 
             try:
